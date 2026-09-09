@@ -22,6 +22,7 @@
   "bugs": {
     "url": "https://github.com/smarthomesven/homey-mergbw/issues"
   },
+  "homeyCommunityTopicId": 159389,
   "permissions": [
     "homey:wireless:ble"
   ],
