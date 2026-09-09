@@ -1,0 +1,77 @@
+{
+  "_comment": "This file is generated. Please edit .homeycompose/app.json instead.",
+  "id": "com.szwest",
+  "version": "1.0.0",
+  "compatibility": ">=12.4.0",
+  "sdk": 3,
+  "runtime": "nodejs",
+  "platforms": [
+    "local"
+  ],
+  "name": {
+    "en": "MeRGBW"
+  },
+  "description": {
+    "en": "Colorful smart life, Lights up your world"
+  },
+  "category": [
+    "lights"
+  ],
+  "brandColor": "#000000",
+  "source": "https://github.com/smarthomesven/homey-mergbw",
+  "bugs": {
+    "url": "https://github.com/smarthomesven/homey-mergbw/issues"
+  },
+  "permissions": [
+    "homey:wireless:ble"
+  ],
+  "images": {
+    "small": "/assets/images/small.png",
+    "large": "/assets/images/large.png",
+    "xlarge": "/assets/images/xlarge.png"
+  },
+  "author": {
+    "name": "Sven Serlier",
+    "email": "sven@dypodex.com"
+  },
+  "drivers": [
+    {
+      "name": {
+        "en": "LED Lights"
+      },
+      "class": "light",
+      "capabilities": [
+        "onoff",
+        "dim",
+        "light_hue",
+        "light_saturation",
+        "light_mode"
+      ],
+      "platforms": [
+        "local"
+      ],
+      "connectivity": [
+        "ble"
+      ],
+      "images": {
+        "small": "/drivers/led-strip/assets/images/small.png",
+        "large": "/drivers/led-strip/assets/images/large.png",
+        "xlarge": "/drivers/led-strip/assets/images/xlarge.png"
+      },
+      "pair": [
+        {
+          "id": "list_devices",
+          "template": "list_devices",
+          "navigation": {
+            "next": "add_devices"
+          }
+        },
+        {
+          "id": "add_devices",
+          "template": "add_devices"
+        }
+      ],
+      "id": "led-strip"
+    }
+  ]
+}
