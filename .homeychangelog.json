@@ -4,5 +4,8 @@
   },
   "1.0.1": {
     "en": "Added forum topic id"
+  },
+  "1.1.0": {
+    "en": "Added auto-disconnect to allow the MeRGBW mobile app to connect as well"
   }
 }
