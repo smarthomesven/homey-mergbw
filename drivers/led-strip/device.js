@@ -7,10 +7,9 @@ const SERVICE_UUID = 'fff0';
 const CHARACTERISTIC_WRITEABLE = 'fff3';
 const CHARACTERISTIC_NOTIFY = 'fff4';
 
-const IDLE_DISCONNECT_MS = 10000;
-
-const CONNECT_RETRY_ATTEMPTS = 2;
-const CONNECT_RETRY_DELAY_MS = 300;
+const IDLE_DISCONNECT_MS = 4000;
+const CONNECT_RETRY_ATTEMPTS = 3;
+const CONNECT_RETRY_DELAY_MS = 500;
 const WRITE_RETRY_ATTEMPTS = 2;
 
 class MeRGBWDevice extends Homey.Device {
@@ -27,11 +26,6 @@ class MeRGBWDevice extends Homey.Device {
     this.registerCapabilityListener('dim', this.onCapabilityDim.bind(this));
     this.registerMultipleCapabilityListener(['light_hue', 'light_saturation'], this.onCapabilityColor.bind(this));
     this.registerCapabilityListener('light_mode', () => Promise.resolve()); // no-op, just to avoid "no listener" warnings
-
-    // Don't connect on init anymore -- only connect when a command needs
-    // sending (see _ensureConnected), so the device sits disconnected and
-    // leaves the mobile app free until Homey actually has something to say.
-    await this.setAvailable();
   }
 
   async onUninit() {
@@ -47,12 +41,6 @@ class MeRGBWDevice extends Homey.Device {
     }
   }
 
-  /**
-   * (Re)arm the idle-disconnect timer after a successful command. A quick
-   * burst of changes (e.g. dragging the color wheel, which fires hue and
-   * saturation together) reuses one connection; once nothing happens for
-   * IDLE_DISCONNECT_MS, we disconnect so the phone app can connect again.
-   */
   _armIdleTimer() {
     this._clearIdleTimer();
     this.idleDisconnectTimer = this.homey.setTimeout(() => {
@@ -61,11 +49,6 @@ class MeRGBWDevice extends Homey.Device {
     }, IDLE_DISCONNECT_MS);
   }
 
-  /**
-   * Ensure a connection is in place before sending a command, connecting
-   * fresh if needed. Concurrent callers share a single in-flight connect
-   * attempt instead of racing to connect twice.
-   */
   async _ensureConnected() {
     if (this.peripheral && this.writeCharacteristic) {
       this._clearIdleTimer();
@@ -97,10 +80,6 @@ class MeRGBWDevice extends Homey.Device {
           || err.message === 'MeRGBW GATT service (0xFFF0) not found'
           || err.message === 'MeRGBW characteristics (0xFFF3/0xFFF4) not found';
         this.error(`Connect attempt ${attempt}/${CONNECT_RETRY_ATTEMPTS} failed:`, err.message);
-        // Whatever partial connection state this attempt left behind is
-        // not trustworthy -- drop it entirely before retrying from scratch
-        // (a fresh advertisement.connect(), not a reuse of the stale
-        // peripheral/service handles that caused the failure).
         await this._disconnect();
         if (!retryable || attempt === CONNECT_RETRY_ATTEMPTS) break;
         await this._sleep(CONNECT_RETRY_DELAY_MS);
@@ -115,13 +94,6 @@ class MeRGBWDevice extends Homey.Device {
     const peripheral = await advertisement.connect();
 
     peripheral.once('disconnect', () => this._onDisconnected());
-
-    // Give the peripheral a brief moment to settle after connecting.
-    // Homey's own dev tools work reliably here because a human clicking
-    // through each step naturally introduces this delay; our code was
-    // firing discoverServices() -> discoverCharacteristics() back to
-    // back, which appears to return characteristics as an empty array
-    // (not an error) on this device when done too quickly.
     await this._sleep(300);
 
     const services = await peripheral.discoverServices();
@@ -143,26 +115,51 @@ class MeRGBWDevice extends Homey.Device {
       throw new Error('MeRGBW characteristics (0xFFF3/0xFFF4) not found');
     }
 
-    // Notifications don't work correctly with Homey, skipping.
-
     this.peripheral = peripheral;
     this.writeCharacteristic = writeCharacteristic;
     this.notifyCharacteristic = notifyCharacteristic;
-    await this.setAvailable();
-
-    // Mirrors BaseDeviceDetailViewModel#initData(), which requests a
-    // sync/status frame right after connecting.
     await this._writeRaw(protocol.encodeSyncRequest());
+
+    try {
+      await this._writeRaw(protocol.encodeTimeSync(this._getLocalDate()));
+    } catch (err) {
+      this.error('Time sync failed (non-fatal):', err.message);
+    }
 
     this.log('MeRGBW device connected and ready');
   }
 
+  _getLocalDate() {
+    const timezone = this.homey.clock.getTimezone();
+    const now = new Date();
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).formatToParts(now);
+      const get = (type) => parts.find((p) => p.type === type).value;
+      const hour = Number(get('hour')) % 24;
+      return new Date(
+        Number(get('year')),
+        Number(get('month')) - 1,
+        Number(get('day')),
+        hour,
+        Number(get('minute')),
+        Number(get('second')),
+      );
+    } catch (err) {
+      this.error('Could not resolve timezone, falling back to system time:', err.message);
+      return now;
+    }
+  }
+
   _normalizeUuid(uuid) {
-    // Homey's BLE layer has been observed to report the service UUID in
-    // full 128-bit form (e.g. "0000fff0-0000-1000-8000-00805f9b34fb") but
-    // characteristic UUIDs in short 16-bit form (e.g. "fff3") for the same
-    // device -- so normalize both down to the bare short form for
-    // comparison rather than assuming either shape.
     const stripped = uuid.toLowerCase().replace(/-/g, '');
     if (stripped.length === 32 && stripped.startsWith('0000') && stripped.endsWith('00001000800000805f9b34fb')) {
       return stripped.slice(4, 8);
@@ -190,11 +187,6 @@ class MeRGBWDevice extends Homey.Device {
   }
 
   _onDisconnected() {
-    // Fires both for our own idle-disconnect and for an unexpected drop
-    // (device power loss, phone app taking over the single connection
-    // slot, etc). Either way, just clear state -- the next capability
-    // write reconnects on demand, so there is no background reconnect
-    // loop or "unavailable" tile for a disconnect that was intentional.
     this.log('MeRGBW device disconnected');
     this._clearIdleTimer();
     this.peripheral = null;
@@ -202,11 +194,6 @@ class MeRGBWDevice extends Homey.Device {
     this.notifyCharacteristic = null;
   }
 
-  /**
-   * Parse incoming notify frames. Unused for now -- notify subscription is
-   * skipped entirely (known-broken on Homey against this class of device).
-   * Left in place in case that's ever fixed on Homey's side.
-   */
   _onNotify(data) {
     this.log('Notify:', data.toString('hex'));
     const status = protocol.parseSyncStatus(data);
@@ -215,7 +202,6 @@ class MeRGBWDevice extends Homey.Device {
     }
   }
 
-  /** Raw write, no connect-ensuring or idle-timer side effects -- used internally by _connect's own sync request. */
   async _writeRaw(buffer) {
     if (!this.peripheral || !this.writeCharacteristic) {
       throw new Error('Not connected');
@@ -230,13 +216,6 @@ class MeRGBWDevice extends Homey.Device {
     }
   }
 
-  /**
-   * Public write path for capability listeners: ensures connection, writes,
-   * then arms the idle-disconnect timer. Retries once (reconnecting first)
-   * if the strip drops the connection mid-write -- confirmed to happen
-   * unpredictably on this device even outside Homey (same behavior seen in
-   * nRF Connect), so this isn't a one-off to just log and move past.
-   */
   async _write(buffer) {
     let lastErr;
     for (let attempt = 1; attempt <= WRITE_RETRY_ATTEMPTS; attempt++) {
@@ -248,10 +227,6 @@ class MeRGBWDevice extends Homey.Device {
       } catch (err) {
         lastErr = err;
         this.error(`Write attempt ${attempt}/${WRITE_RETRY_ATTEMPTS} failed:`, err.message);
-        // The connection this write was using is no longer trustworthy
-        // (whether it dropped mid-write or was never really established) --
-        // discard it so the next attempt's _ensureConnected() reconnects
-        // from scratch rather than retrying against a dead peripheral.
         await this._disconnect();
         if (attempt === WRITE_RETRY_ATTEMPTS) break;
       }
@@ -268,9 +243,6 @@ class MeRGBWDevice extends Homey.Device {
   }
 
   async onCapabilityColor(values) {
-    // registerMultipleCapabilityListener passes an object containing
-    // whichever of the registered capabilities changed; fall back to the
-    // currently stored value for whichever one didn't.
     const hue = (values.light_hue !== undefined ? values.light_hue : this.getCapabilityValue('light_hue')) || 0;
     const saturation = (values.light_saturation !== undefined ? values.light_saturation : this.getCapabilityValue('light_saturation')) || 0;
     await this._write(protocol.encodeColor(hue * 360, saturation));
