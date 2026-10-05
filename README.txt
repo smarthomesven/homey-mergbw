@@ -1,1 +1,1 @@
-Connect your MeRGBW LED strips to Homey. Note that this connection is statelessm which means that any changes made from the buttons on the LED controller itself or the MeRGBW mobile app won't reflect in Homey.
+Connect your MeRGBW LED strips to Homey. Note that this connection is stateless which means that any changes made from the buttons on the LED controller itself or the MeRGBW mobile app won't reflect in Homey.
